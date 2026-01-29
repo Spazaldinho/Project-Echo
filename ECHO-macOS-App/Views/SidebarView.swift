@@ -15,6 +15,7 @@ extension Color {
 enum NavigationItem: String, CaseIterable, Identifiable {
     case dashboard = "Dashboard"
     case timeline = "Timeline"
+    case screenCapture = "Screen Capture"
     case ask = "Ask"
     case projects = "Projects"
     case settings = "Settings"
@@ -26,6 +27,7 @@ enum NavigationItem: String, CaseIterable, Identifiable {
         switch self {
         case .dashboard: return "house"
         case .timeline: return "chart.xyaxis.line"
+        case .screenCapture: return "camera.viewfinder"
         case .ask: return "magnifyingglass"
         case .projects: return "folder"
         case .settings: return "gearshape"

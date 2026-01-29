@@ -27,6 +27,8 @@ struct ContentView: View {
                     DashboardView(activityManager: activityManager)
                 case .timeline:
                     TimelineView()
+                case .screenCapture:
+                    ScreenCaptureView(activityManager: activityManager)
                 case .ask:
                     AskView()
                 case .projects:

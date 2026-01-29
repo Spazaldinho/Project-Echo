@@ -22,6 +22,7 @@ struct DailyStats {
 /// 3. Access `events` array to display recent activity
 /// 4. Access `stats` to display daily statistics
 /// 5. Use `isTracking` to control tracking state
+/// 6. Use `performScreenCapture()` to trigger OCR and window mapping
 @Observable
 class ActivityManager {
     // MARK: - Public Properties
@@ -41,9 +42,21 @@ class ActivityManager {
     /// Whether tracking is currently active
     var isTracking: Bool = false
     
+    // OCR-related properties
+    /// Latest OCR results from screen capture
+    var ocrResults: [OCRResult] = []
+    
+    /// Latest mapped windows with their contained text
+    var mappedWindows: [MappedWindow] = []
+    
+    /// Latest captured screenshot
+    var capturedImage: NSImage?
+    
     // MARK: - Private Properties
     
     private var modelContext: ModelContext?
+    private let ocrEngine = OCREngine()
+    private let windowManager = WindowManager()
     
     // MARK: - Initialization
     
@@ -71,40 +84,7 @@ class ActivityManager {
         // TODO: Backend team - implement your tracking cleanup here
     }
     
-    // MARK: - Event Management
-    
-    /// Add a new activity event
-    /// - Parameters:
-    ///   - source: The source/project name (e.g., "MyProject")
-    ///   - type: The event type (e.g., "file_edit", "app_switch")
-    ///   - text: The event details (e.g., file path, app name)
-    ///   - meta: Optional metadata as JSON string
-    ///
-    /// **Example Usage:**
-    /// ```swift
-    /// activityManager.addEvent(
-    ///     source: "ECHO-macOS-App",
-    ///     type: "file_edit",
-    ///     text: "ContentView.swift",
-    ///     meta: nil
-    /// )
-    /// ```
-    func addEvent(source: String, type: String, text: String, meta: String? = nil) {
-        let newEvent = Event(source: source, type: type, text: text, meta: meta)
-        
-        guard let context = modelContext else {
-            print("⚠️ ModelContext not configured")
-            return
-        }
-        
-        context.insert(newEvent)
-        events.append(newEvent)
-        recalculateStats()
-        
-        // Update current state
-        currentFile = text
-        currentProject = source
-    }
+    // MARK: - Event Management (see OCR Methods section for enhanced addEvent)
     
     /// Clear all events from the database (useful for testing/development)
     func clearAllEvents() {
@@ -178,5 +158,110 @@ class ActivityManager {
             files: uniqueFiles,
             events: events.count
         )
+    }
+    
+    // MARK: - OCR Methods
+    
+    /// Perform screen capture and OCR analysis
+    @MainActor
+    func performScreenCapture() async {
+        // Capture the main screen
+        guard let image = await windowManager.captureMainScreen() else {
+            print("❌ Failed to capture screen")
+            return
+        }
+        
+        capturedImage = image
+        ocrResults = []
+        mappedWindows = []
+        
+        // Perform OCR on the captured image
+        await withCheckedContinuation { continuation in
+            ocrEngine.performOCR(on: image) { [weak self] results in
+                guard let self = self else {
+                    continuation.resume()
+                    return
+                }
+                
+                self.ocrResults = results
+                
+                // Get visible windows
+                let windows = self.windowManager.getVisibleWindows()
+                
+                // Map text to windows
+                var windowMapping: [UUID: [OCRResult]] = [:]
+                
+                for textResult in results {
+                    let centerX = textResult.bounds.x + textResult.bounds.width / 2
+                    let centerY = textResult.bounds.y + textResult.bounds.height / 2
+                    let pointInPoints = CGPoint(x: centerX, y: centerY)
+                    
+                    // Find the topmost window containing this text
+                    if let topmostWindow = windows.first(where: { $0.frame.cgRect.contains(pointInPoints) }) {
+                        windowMapping[topmostWindow.id, default: []].append(textResult)
+                    }
+                }
+                
+                // Create mapped windows
+                var tempMapped: [MappedWindow] = []
+                for window in windows {
+                    let textInWindow = windowMapping[window.id] ?? []
+                    if !textInWindow.isEmpty {
+                        tempMapped.append(MappedWindow(window: window, containedText: textInWindow))
+                    }
+                }
+                
+                self.mappedWindows = tempMapped.sorted { $0.containedText.count > $1.containedText.count }
+                
+                print("✅ OCR complete: \(results.count) text items, \(tempMapped.count) windows")
+                continuation.resume()
+            }
+        }
+    }
+    
+    /// Process OCR results into events (optional - for future automatic tracking)
+    func processOCRResults() {
+        for mapped in mappedWindows {
+            for text in mapped.containedText {
+                // Create an event for each detected text
+                let boundsJSON = "{\"x\":\(text.bounds.x),\"y\":\(text.bounds.y),\"width\":\(text.bounds.width),\"height\":\(text.bounds.height)}"
+                
+                addEvent(
+                    source: mapped.window.ownerName,
+                    type: "ocr_detection",
+                    text: text.text,
+                    meta: nil,
+                    windowName: mapped.window.displayName,
+                    ocrText: text.text,
+                    bounds: boundsJSON
+                )
+            }
+        }
+    }
+    
+    /// Enhanced addEvent with OCR support
+    func addEvent(source: String, type: String, text: String, meta: String? = nil, windowName: String? = nil, ocrText: String? = nil, bounds: String? = nil) {
+        let newEvent = Event(
+            source: source,
+            type: type,
+            text: text,
+            meta: meta,
+            windowName: windowName,
+            ocrText: ocrText,
+            bounds: bounds
+        )
+        
+        guard let context = modelContext else {
+            print("⚠️ ModelContext not configured")
+            return
+        }
+        
+        context.insert(newEvent)
+        events.append(newEvent)
+        recalculateStats()
+        
+        // Update current state
+        currentFile = text
+        currentProject = source
     }
 }

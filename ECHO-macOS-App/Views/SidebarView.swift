@@ -15,7 +15,6 @@ extension Color {
 enum NavigationItem: String, CaseIterable, Identifiable {
     case dashboard = "Dashboard"
     case timeline = "Timeline"
-    case screenCapture = "Screen Capture"
     case ask = "Ask"
     case projects = "Projects"
     case settings = "Settings"
@@ -27,7 +26,6 @@ enum NavigationItem: String, CaseIterable, Identifiable {
         switch self {
         case .dashboard: return "house"
         case .timeline: return "chart.xyaxis.line"
-        case .screenCapture: return "camera.viewfinder"
         case .ask: return "magnifyingglass"
         case .projects: return "folder"
         case .settings: return "gearshape"
@@ -78,7 +76,7 @@ struct SidebarView: View {
                 VStack(spacing: 8) {
                     HStack(spacing: 8) {
                         Circle()
-                            .fill(activityManager.isTracking ? Color.green.opacity(0.9) : Color.orange.opacity(0.8))
+                            .fill(activityManager.isTracking ? Color.green.opacity(0.9) : Color.yellow.opacity(0.8))
                             .frame(width: 10, height: 10)
                             .shadow(color: activityManager.isTracking ? Color.green.opacity(0.5) : .clear, radius: 4)
                         Text(activityManager.isTracking ? "Tracking Active" : "Tracking Paused")
@@ -86,16 +84,11 @@ struct SidebarView: View {
                             .foregroundStyle(.white.opacity(0.9))
                     }
                     
-                    Text("\(activityManager.stats.events) events ready to be\ncompiled")
+                    Text("\(activityManager.pendingCount) screenshot\(activityManager.pendingCount == 1 ? "" : "s") ready to be\ncompiled")
                         .font(.system(size: 12))
                         .multilineTextAlignment(.center)
                         .foregroundStyle(Color.mutedGray)
                         .fixedSize(horizontal: false, vertical: true)
-                    
-                    Text("Last: 2 minutes ago")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.mutedGray.opacity(0.7))
-                        .padding(.top, 2)
                 }
                 
                 HStack(spacing: 6) {
@@ -144,7 +137,9 @@ struct SidebarView: View {
                     
                     // Compile Button (accent)
                     Button {
-                        // Compile action placeholder
+                        Task { @MainActor in
+                            activityManager.compilePendingScreenshots()
+                        }
                     } label: {
                         Text("Compile")
                             .font(.system(size: 11, weight: .semibold))
@@ -160,6 +155,7 @@ struct SidebarView: View {
                             }
                     }
                     .buttonStyle(.plain)
+                    .disabled(activityManager.pendingCount == 0)
                 }
             }
             .padding(18)

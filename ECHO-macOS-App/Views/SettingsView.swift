@@ -25,6 +25,91 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 
+                SettingSection(title: "Automatic Capture", description: "Configure automatic screenshot and OCR tracking") {
+                    HStack(spacing: 16) {
+                        Image(systemName: "camera.aperture")
+                            .font(.title3)
+                            .frame(width: 32, height: 32)
+                            .background(Color.gray.opacity(0.2))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .foregroundStyle(.secondary)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Enable Auto-Capture").fontWeight(.medium)
+                            Text("Automatically capture screenshots at regular intervals").font(.caption).foregroundStyle(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Toggle("", isOn: Binding(
+                            get: { activityManager.isAutoCapturing },
+                            set: { newValue in
+                                Task { @MainActor in
+                                    if newValue {
+                                        activityManager.startAutoCapture()
+                                    } else {
+                                        activityManager.stopAutoCapture()
+                                    }
+                                }
+                            }
+                        ))
+                        .toggleStyle(.switch)
+                    }
+                    .padding(.vertical, 8)
+                    
+                    Divider().opacity(0.5)
+                    
+                    VStack(spacing: 12) {
+                        HStack(spacing: 16) {
+                            Image(systemName: "timer")
+                                .font(.title3)
+                                .frame(width: 32, height: 32)
+                                .background(Color.gray.opacity(0.2))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .foregroundStyle(.secondary)
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Capture Interval").fontWeight(.medium)
+                                Text("How often to capture screenshots").font(.caption).foregroundStyle(.secondary)
+                            }
+                            
+                            Spacer()
+                            
+                            Text(formatInterval(activityManager.captureInterval))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        
+                        Slider(
+                            value: Binding(
+                                get: { activityManager.captureInterval },
+                                set: { newValue in
+                                    Task { @MainActor in
+                                        activityManager.updateCaptureInterval(newValue)
+                                    }
+                                }
+                            ),
+                            in: 5...60,
+                            step: 5
+                        )
+                        .disabled(!activityManager.isAutoCapturing)
+                    }
+                    .padding(.vertical, 8)
+                    
+                    Divider().opacity(0.5)
+                    
+                    ToggleRow(
+                        icon: "doc.text.magnifyingglass",
+                        title: "Auto-Generate Events",
+                        subtitle: "Create events from captured screenshots",
+                        isOn: Binding(
+                            get: { activityManager.autoGenerateEvents },
+                            set: { activityManager.autoGenerateEvents = $0 }
+                        )
+                    )
+                }
+                
                 SettingSection(title: "Tracking", description: "Configure how ECHO monitors your activity") {
                     ToggleRow(icon: "display", title: "Auto-start tracking", subtitle: "Begin tracking when you log in", isOn: $autoStart)
                     Divider().opacity(0.5)
@@ -88,6 +173,15 @@ struct SettingsView: View {
                 
             }
             .padding(30)
+        }
+    }
+    
+    private func formatInterval(_ seconds: TimeInterval) -> String {
+        if seconds < 60 {
+            return "\(Int(seconds))s"
+        } else {
+            let minutes = Int(seconds / 60)
+            return "\(minutes)m"
         }
     }
 }

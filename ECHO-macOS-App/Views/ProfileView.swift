@@ -1,15 +1,35 @@
 import SwiftUI
 
 struct ProfileView: View {
-    @State private var userName = "John Doe"
-    @State private var userTitle = "Full-Stack Developer"
-    @State private var userEmail = "john@example.com"
+    // Persistent profile data
+    @AppStorage("userName") private var userName = "John Doe"
+    @AppStorage("userTitle") private var userTitle = "Full-Stack Developer"
+    @AppStorage("userEmail") private var userEmail = "john@example.com"
     @State private var showingEditProfile = false
     
     // Temporary state for editing
     @State private var editName = ""
     @State private var editTitle = ""
     @State private var editEmail = ""
+    
+    // Activity manager for real stats
+    @Bindable var activityManager: ActivityManager
+    
+    // Calculate real statistics from events
+    var totalHoursTracked: String {
+        let hours = activityManager.calculateTotalHours()
+        return String(format: "%.0fh", hours)
+    }
+    
+    var activeStreak: String {
+        let days = activityManager.calculateWorkStreak()
+        return "\(days) day\(days == 1 ? "" : "s")"
+    }
+    
+    var weeklyHours: String {
+        let hours = activityManager.calculateWeeklyHours()
+        return String(format: "%.0f", hours)
+    }
     
     var userInitials: String {
         let components = userName.split(separator: " ")
@@ -84,8 +104,8 @@ struct ProfileView: View {
                 
                 // Stats Row
                 HStack(spacing: 20) {
-                    ProfileStatCard(icon: "clock", value: "257h", label: "Total Time Tracked", color: .blue)
-                    ProfileStatCard(icon: "flame", value: "12 days", label: "Active Streak", color: .orange)
+                    ProfileStatCard(icon: "clock", value: totalHoursTracked, label: "Total Time Tracked", color: .blue)
+                    ProfileStatCard(icon: "flame", value: activeStreak, label: "Active Streak", color: .orange)
                 }
                 
                 // Weekly Graph
@@ -106,7 +126,7 @@ struct ProfileView: View {
                     .frame(height: 120)
                     .padding(.top, 10)
                     
-                    Text("You've tracked 28 hours this week")
+                    Text("You've tracked \(weeklyHours) hours this week")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .center)

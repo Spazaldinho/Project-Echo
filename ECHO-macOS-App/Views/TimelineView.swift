@@ -1,12 +1,10 @@
 import SwiftUI
 
 struct TimelineView: View {
+    @Bindable var activityManager: ActivityManager
     @State private var selectedDate = Date()
     @State private var showDatePicker = false
     @State private var filter: String = "All"
-    
-    // Ready for backend integration - empty activities array
-    @State private var activities: [TimelineEvent] = []
     
     var dateFormatter: DateFormatter {
         let formatter = DateFormatter()
@@ -16,6 +14,31 @@ struct TimelineView: View {
     
     var isToday: Bool {
         Calendar.current.isDateInToday(selectedDate)
+    }
+    
+    // Filter events for the selected date
+    var filteredEvents: [Event] {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: selectedDate)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+        
+        return activityManager.events.filter { event in
+            event.timestamp >= startOfDay && event.timestamp < endOfDay
+        }
+    }
+    
+    // Convert Events to TimelineEvents for display
+    var timelineEvents: [TimelineEvent] {
+        filteredEvents.map { event in
+            TimelineEvent(
+                time: event.timestamp.formatted(date: .omitted, time: .shortened),
+                duration: "Active",
+                title: event.type.replacingOccurrences(of: "_", with: " ").capitalized,
+                desc: event.text,
+                type: mapEventType(event.type),
+                originalEvent: event
+            )
+        }
     }
     
     var body: some View {
@@ -117,7 +140,7 @@ struct TimelineView: View {
             
             // List
             ScrollView {
-                if activities.isEmpty {
+                if timelineEvents.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "calendar.badge.clock")
                             .font(.system(size: 48))
@@ -126,9 +149,10 @@ struct TimelineView: View {
                         Text("No events for this day")
                             .font(.title3)
                             .fontWeight(.medium)
-                        Text("Events will appear here once your backend is integrated")
+                        Text(isToday ? "Enable auto-capture in Settings to start tracking" : "No activity recorded for this date")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 40)
@@ -142,7 +166,7 @@ struct TimelineView: View {
                             .padding(.top, 20)
                         
                         VStack(spacing: 0) {
-                            ForEach(activities) { activity in
+                            ForEach(timelineEvents) { activity in
                                 TimelineRowItem(activity: activity)
                             }
                         }
@@ -153,6 +177,22 @@ struct TimelineView: View {
         }
         .padding(30)
         .background(Color.contentBackground)
+    }
+    
+    // Map event type strings to TimelineEvent.ActivityType
+    private func mapEventType(_ type: String) -> TimelineEvent.ActivityType {
+        switch type.lowercased() {
+        case "coding", "ocr_detection":
+            return .code
+        case "browsing":
+            return .research
+        case "communication":
+            return .meeting
+        case "design", "writing":
+            return .design
+        default:
+            return .code
+        }
     }
 }
 
@@ -229,6 +269,7 @@ struct TimelineEvent: Identifiable {
     let title: String
     let desc: String
     let type: ActivityType
+    let originalEvent: Event?
     
     enum ActivityType {
         case code, research, meeting, design

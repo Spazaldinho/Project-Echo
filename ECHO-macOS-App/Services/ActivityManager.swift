@@ -12,6 +12,15 @@ struct DailyStats {
     var events: Int = 0
 }
 
+/// Captured screenshot with OCR data, pending compilation
+struct CapturedScreenshot: Identifiable {
+    let id = UUID()
+    let timestamp: Date
+    let image: NSImage
+    let ocrResults: [OCRResult]
+    let mappedWindows: [MappedWindow]
+}
+
 // MARK: - Activity Manager
 
 /// Manages activity tracking and statistics
@@ -52,11 +61,35 @@ class ActivityManager {
     /// Latest captured screenshot
     var capturedImage: NSImage?
     
+    // Automatic capture properties
+    /// Whether automatic capture is currently active
+    var isAutoCapturing: Bool = false
+    
+    /// Capture interval in seconds (default: 5 seconds, range: 5s - 1min)
+    var captureInterval: TimeInterval = 5
+    
+    /// Whether to automatically generate events from captures (disabled for compile-based workflow)
+    var autoGenerateEvents: Bool = false
+    
+    // Pending screenshots (before compilation)
+    /// Array of screenshots captured but not yet compiled into events
+    var pendingScreenshots: [CapturedScreenshot] = []
+    
+    /// Count of pending screenshots ready to be compiled
+    var pendingCount: Int {
+        pendingScreenshots.count
+    }
+    
     // MARK: - Private Properties
     
     private var modelContext: ModelContext?
     private let ocrEngine = OCREngine()
     private let windowManager = WindowManager()
+    private var captureTimer: Timer?
+    
+    // Track recent events to prevent duplicates
+    private var recentEventKeys: Set<String> = []
+    private let deduplicationWindow: TimeInterval = 300 // 5 minutes
     
     // MARK: - Initialization
     
@@ -68,6 +101,11 @@ class ActivityManager {
         self.modelContext = context
         fetchTodayEvents()
         startTracking()
+        
+        // Start auto-capture by default for compile-based workflow
+        Task { @MainActor in
+            startAutoCapture()
+        }
     }
     
     // MARK: - Tracking Control
@@ -160,6 +198,181 @@ class ActivityManager {
         )
     }
     
+    // MARK: - Statistics Calculation
+    
+    /// Calculate total hours tracked across all events
+    func calculateTotalHours() -> Double {
+        guard !events.isEmpty else { return 0 }
+        
+        // Group events by day and calculate hours for each day
+        let calendar = Calendar.current
+        let eventsByDay = Dictionary(grouping: events) { event in
+            calendar.startOfDay(for: event.timestamp)
+        }
+        
+        var totalHours = 0.0
+        for (_, dayEvents) in eventsByDay {
+            let sortedEvents = dayEvents.sorted { $0.timestamp < $1.timestamp }
+            if let first = sortedEvents.first, let last = sortedEvents.last {
+                let duration = last.timestamp.timeIntervalSince(first.timestamp)
+                totalHours += duration / 3600.0
+            }
+        }
+        
+        return totalHours
+    }
+    
+    /// Calculate hours worked this week
+    func calculateWeeklyHours() -> Double {
+        let calendar = Calendar.current
+        let now = Date()
+        guard let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)) else {
+            return 0
+        }
+        
+        let weekEvents = events.filter { $0.timestamp >= weekStart }
+        
+        let eventsByDay = Dictionary(grouping: weekEvents) { event in
+            calendar.startOfDay(for: event.timestamp)
+        }
+        
+        var weeklyHours = 0.0
+        for (_, dayEvents) in eventsByDay {
+            let sortedEvents = dayEvents.sorted { $0.timestamp < $1.timestamp }
+            if let first = sortedEvents.first, let last = sortedEvents.last {
+                let duration = last.timestamp.timeIntervalSince(first.timestamp)
+                weeklyHours += duration / 3600.0
+            }
+        }
+        
+        return weeklyHours
+    }
+    
+    /// Calculate consecutive days with activity (work streak)
+    func calculateWorkStreak() -> Int {
+        let calendar = Calendar.current
+        var streak = 0
+        var currentDate = calendar.startOfDay(for: Date())
+        
+        // Get all unique days with events
+        let daysWithEvents = Set(events.map { event in
+            calendar.startOfDay(for: event.timestamp)
+        })
+        
+        // Count backwards from today
+        while daysWithEvents.contains(currentDate) {
+            streak += 1
+            guard let previousDay = calendar.date(byAdding: .day, value: -1, to: currentDate) else {
+                break
+            }
+            currentDate = previousDay
+        }
+        
+        return streak
+    }
+    
+    /// Get events for a specific date
+    func getEvents(for date: Date) -> [Event] {
+        let calendar = Calendar.current
+        return events.filter { calendar.isDate($0.timestamp, inSameDayAs: date) }
+    }
+    
+    // MARK: - Automatic Capture Control
+    
+    /// Start automatic screen capture at the configured interval
+    @MainActor
+    func startAutoCapture() {
+        guard !isAutoCapturing else { return }
+        
+        isAutoCapturing = true
+        
+        // Perform initial capture
+        Task {
+            await performAutomaticCapture()
+        }
+        
+        // Schedule periodic captures
+        captureTimer = Timer.scheduledTimer(withTimeInterval: captureInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                await self?.performAutomaticCapture()
+            }
+        }
+        
+        print("✅ Auto-capture started (interval: \(captureInterval)s)")
+    }
+    
+    /// Stop automatic screen capture
+    @MainActor
+    func stopAutoCapture() {
+        guard isAutoCapturing else { return }
+        
+        isAutoCapturing = false
+        captureTimer?.invalidate()
+        captureTimer = nil
+        
+        print("⏹️ Auto-capture stopped")
+    }
+    
+    /// Update the capture interval and restart timer if active
+    @MainActor
+    func updateCaptureInterval(_ interval: TimeInterval) {
+        captureInterval = interval
+        
+        if isAutoCapturing {
+            stopAutoCapture()
+            startAutoCapture()
+        }
+    }
+    
+    /// Perform automatic capture and store screenshot for later compilation
+    @MainActor
+    private func performAutomaticCapture() async {
+        await performScreenCapture()
+        
+        // Store screenshot for compilation instead of generating events immediately
+        if let image = capturedImage, !mappedWindows.isEmpty {
+            let screenshot = CapturedScreenshot(
+                timestamp: Date(),
+                image: image,
+                ocrResults: ocrResults,
+                mappedWindows: mappedWindows
+            )
+            pendingScreenshots.append(screenshot)
+            print("📸 Screenshot captured (\(pendingCount) pending)")
+        }
+    }
+    
+    /// Compile all pending screenshots into events
+    @MainActor
+    func compilePendingScreenshots() {
+        guard !pendingScreenshots.isEmpty else {
+            print("⚠️ No screenshots to compile")
+            return
+        }
+        
+        let count = pendingScreenshots.count
+        print("🔄 Compiling \(count) screenshots...")
+        
+        // Process each pending screenshot
+        for screenshot in pendingScreenshots {
+            // Temporarily set the current capture data
+            capturedImage = screenshot.image
+            ocrResults = screenshot.ocrResults
+            mappedWindows = screenshot.mappedWindows
+            
+            // Generate events intelligently
+            processOCRResultsIntelligently()
+        }
+        
+        // Clear pending screenshots
+        pendingScreenshots.removeAll()
+        
+        // Refresh today's events to update UI
+        fetchTodayEvents()
+        
+        print("✅ Compilation complete! Generated events from \(count) screenshots")
+    }
+    
     // MARK: - OCR Methods
     
     /// Perform screen capture and OCR analysis
@@ -219,7 +432,7 @@ class ActivityManager {
         }
     }
     
-    /// Process OCR results into events (optional - for future automatic tracking)
+    /// Process OCR results into events (basic - creates event for each text)
     func processOCRResults() {
         for mapped in mappedWindows {
             for text in mapped.containedText {
@@ -236,6 +449,74 @@ class ActivityManager {
                     bounds: boundsJSON
                 )
             }
+        }
+    }
+    
+    /// Intelligently process OCR results to create meaningful, deduplicated events
+    private func processOCRResultsIntelligently() {
+        guard !mappedWindows.isEmpty else { return }
+        
+        // Get the window with the most text (likely the active/focused window)
+        guard let primaryWindow = mappedWindows.first else { return }
+        
+        // Create a unique key for this window state
+        let windowKey = "\(primaryWindow.window.ownerName)_\(primaryWindow.window.windowTitle)"
+        
+        // Check if we've recently created an event for this window
+        if recentEventKeys.contains(windowKey) {
+            return // Skip duplicate
+        }
+        
+        // Add to recent events
+        recentEventKeys.insert(windowKey)
+        
+        // Clean up old entries (older than deduplication window)
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(deduplicationWindow * 1_000_000_000))
+            recentEventKeys.remove(windowKey)
+        }
+        
+        // Determine event type based on application
+        let eventType = determineEventType(for: primaryWindow.window.ownerName)
+        
+        // Get a meaningful text snippet (first substantial text or window title)
+        let meaningfulText = primaryWindow.containedText
+            .first(where: { $0.text.count > 10 })?.text
+            ?? primaryWindow.window.windowTitle
+            ?? primaryWindow.window.ownerName
+        
+        // Create the event
+        let meta = "{\"textCount\":\(primaryWindow.containedText.count),\"windowCount\":\(mappedWindows.count)}"
+        
+        addEvent(
+            source: primaryWindow.window.ownerName,
+            type: eventType,
+            text: meaningfulText,
+            meta: meta,
+            windowName: primaryWindow.window.displayName,
+            ocrText: nil,
+            bounds: nil
+        )
+        
+        print("📝 Created event: \(eventType) - \(primaryWindow.window.ownerName)")
+    }
+    
+    /// Determine event type based on application name
+    private func determineEventType(for appName: String) -> String {
+        let lowercased = appName.lowercased()
+        
+        if lowercased.contains("xcode") || lowercased.contains("code") || lowercased.contains("terminal") {
+            return "coding"
+        } else if lowercased.contains("safari") || lowercased.contains("chrome") || lowercased.contains("firefox") {
+            return "browsing"
+        } else if lowercased.contains("slack") || lowercased.contains("teams") || lowercased.contains("zoom") {
+            return "communication"
+        } else if lowercased.contains("figma") || lowercased.contains("sketch") || lowercased.contains("photoshop") {
+            return "design"
+        } else if lowercased.contains("notes") || lowercased.contains("notion") || lowercased.contains("obsidian") {
+            return "writing"
+        } else {
+            return "app_usage"
         }
     }
     

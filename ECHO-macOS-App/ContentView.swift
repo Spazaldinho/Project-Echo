@@ -26,9 +26,7 @@ struct ContentView: View {
                 case .dashboard:
                     DashboardView(activityManager: activityManager)
                 case .timeline:
-                    TimelineView()
-                case .screenCapture:
-                    ScreenCaptureView(activityManager: activityManager)
+                    TimelineView(activityManager: activityManager)
                 case .ask:
                     AskView()
                 case .projects:
@@ -36,7 +34,7 @@ struct ContentView: View {
                 case .settings:
                     SettingsView(activityManager: activityManager)
                 case .profile:
-                    ProfileView()
+                    ProfileView(activityManager: activityManager)
                 case .none:
                     Text("Select an item")
                 }
